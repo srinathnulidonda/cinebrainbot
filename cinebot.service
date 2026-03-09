@@ -1,0 +1,28 @@
+[Unit]
+Description=CineBot Telegram Movie Bot
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=cinebot
+Group=cinebot
+WorkingDirectory=/opt/cinebot
+EnvironmentFile=/opt/cinebot/.env
+ExecStart=/opt/cinebot/venv/bin/python run.py
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cinebot
+
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

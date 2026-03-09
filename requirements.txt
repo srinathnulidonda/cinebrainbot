@@ -1,0 +1,17 @@
+python-telegram-bot[webhooks,job-queue]
+sqlalchemy[asyncio]
+asyncpg
+redis[hiredis]
+httpx
+pydantic-settings
+openai
+python-dotenv
+uvicorn
+aiofiles
+alembic
+greenlet
+psycopg2-binary
+gunicorn
+google-generativeai
+groq
+cohere
