@@ -48,7 +48,18 @@ BOT_COMMANDS = [
 
 
 async def error_handler(update: object, context) -> None:
+    from telegram.error import Conflict, NetworkError, TimedOut
+
     error = context.error
+
+    if isinstance(error, Conflict):
+        logger.warning("⚠️ Conflict: old instance still running, retrying automatically...")
+        return
+
+    if isinstance(error, (NetworkError, TimedOut)):
+        logger.warning("⚠️ Network issue: %s", error)
+        return
+
     if isinstance(error, CineBotError):
         if isinstance(update, Update):
             if update.callback_query:
@@ -69,6 +80,24 @@ async def error_handler(update: object, context) -> None:
                 except Exception:
                     pass
         return
+
+    logger.error(f"Unhandled exception: {error}", exc_info=context.error)
+    if isinstance(update, Update):
+        try:
+            if update.callback_query:
+                await update.callback_query.answer("⚠️ Something went wrong.", show_alert=True)
+            elif update.effective_message:
+                from bot.utils.keyboards import rate_limit_kb
+                await update.effective_message.reply_text(
+                    "⚠️ <b>Unexpected Error</b>\n\n"
+                    "Something went wrong. Try again shortly.\n\n"
+                    "📞 /chat if this persists",
+                    parse_mode="HTML",
+                    reply_markup=rate_limit_kb(),
+                )
+        except Exception:
+            pass
+
     logger.error(f"Unhandled exception: {error}", exc_info=context.error)
     if isinstance(update, Update):
         try:
@@ -248,10 +277,14 @@ async def post_init(application: Application) -> None:
     from bot.services import ai_service
     ai_service._init_providers()
     await application.bot.set_my_commands(BOT_COMMANDS)
+    from bot.jobs.status import set_bot_running
+    set_bot_running(True, "polling")
     logger.info("Bot initialized, database ready, commands set")
 
 
 async def post_shutdown(application: Application) -> None:
+    from bot.jobs.status import set_bot_running
+    set_bot_running(False)
     from bot.services import tmdb_service, youtube_service, streaming_service, ai_service
     await tmdb_service.close()
     await youtube_service.close()

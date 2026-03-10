@@ -1,72 +1,87 @@
 # run.py
-import threading
 import logging
+import sys
 import time
+import socket
+import urllib.request
 import json
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import os
 
 logger = logging.getLogger(__name__)
 
-PORT = int(os.environ.get("PORT", 10000))
-START_TIME = time.time()
+
+def wait_for_port(port, timeout=10):
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                logger.info("✅ Port %d is ready", port)
+                return True
+        except (ConnectionRefusedError, OSError):
+            time.sleep(0.5)
+    logger.warning("⚠️ Port %d not ready after %ds", port, timeout)
+    return False
 
 
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        client_ip = self.client_address[0]
-        user_agent = self.headers.get("User-Agent", "Unknown")
+def force_kill_old_session():
+    from bot.config import get_settings
+    token = get_settings().BOT_TOKEN
 
-        if self.path == "/health":
-            uptime = int(time.time() - START_TIME)
-            hours, remainder = divmod(uptime, 3600)
-            minutes, seconds = divmod(remainder, 60)
+    logger.info("🔪 Clearing old polling session...")
 
-            body = json.dumps({
-                "status": "alive",
-                "service": "CineBrainBot",
-                "uptime": f"{hours}h {minutes}m {seconds}s",
-                "uptime_seconds": uptime,
-            })
+    try:
+        url = f"https://api.telegram.org/bot{token}/deleteWebhook"
+        data = json.dumps({"drop_pending_updates": True}).encode()
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+            logger.info("🔪 deleteWebhook: %s", result.get("description", "ok"))
+    except Exception as e:
+        logger.warning("🔪 deleteWebhook failed: %s", e)
 
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body.encode())
-
-            logger.info(
-                f"✅ Health check | IP: {client_ip} | "
-                f"Uptime: {hours}h {minutes}m {seconds}s | "
-                f"Agent: {user_agent[:50]}"
-            )
-        else:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"CineBrainBot is running!")
-            logger.info(f"📡 Request: {self.path} | IP: {client_ip}")
-
-    def log_message(self, format, *args):
-        pass
-
-
-def start_health_server():
-    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    logger.info(f"🚀 Health server started on port {PORT}")
-    server.serve_forever()
+    try:
+        url = f"https://api.telegram.org/bot{token}/getUpdates"
+        data = json.dumps({"offset": -1, "timeout": 0}).encode()
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            logger.info("🔪 Cleared pending updates")
+    except Exception as e:
+        logger.warning("🔪 Clear updates failed: %s", e)
 
 
 def main():
     logging.basicConfig(
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         level=logging.INFO,
+        stream=sys.stdout,
     )
 
     logger.info("🎬 CineBrainBot starting...")
 
-    health_thread = threading.Thread(target=start_health_server, daemon=True)
-    health_thread.start()
+    from bot.jobs.status import start_server, start_self_ping, PORT
 
+    start_server()
+    wait_for_port(PORT)
+    start_self_ping()
+
+    force_kill_old_session()
+
+    logger.info("⏳ Waiting 30s for old instance to fully die...")
+    time.sleep(30)
+
+    force_kill_old_session()
+    time.sleep(2)
+
+    logger.info("🚀 Starting Telegram polling...")
     from bot.main import run_polling
     run_polling()
 
