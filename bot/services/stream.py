@@ -16,7 +16,7 @@ FRONTEND_URL = _s.FRONTEND_URL
 VIDEASY_PARAMS_MOVIE = "?color=e50914&overlay=true"
 VIDEASY_PARAMS_TV = (
     "?color=e50914&nextEpisode=true"
-    "&autoplayNextEpisode=true&episodeSelector=true&overlay=true"
+    "&autoplayNextEpisode=true&overlay=true"
 )
 
 VIDKING_PARAMS_MOVIE = "?color=e50914&autoPlay=true"
