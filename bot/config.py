@@ -64,13 +64,23 @@ class Settings(BaseSettings):
     def async_database_url(self) -> str:
         url = self.DATABASE_URL
         
-        # Convert to asyncpg driver
-        if url.startswith("postgres://"):
-            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-        elif url.startswith("postgresql://"):
-            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        elif not url.startswith("postgresql+asyncpg://"):
-            url = f"postgresql+asyncpg://{url}"
+        # Check if CockroachDB
+        is_cockroach = "cockroach" in url.lower()
+        
+        if is_cockroach:
+            # Use CockroachDB dialect
+            if url.startswith("postgres://"):
+                url = url.replace("postgres://", "cockroachdb+asyncpg://", 1)
+            elif url.startswith("postgresql://"):
+                url = url.replace("postgresql://", "cockroachdb+asyncpg://", 1)
+        else:
+            # Standard PostgreSQL
+            if url.startswith("postgres://"):
+                url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+            elif url.startswith("postgresql://"):
+                url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            elif not url.startswith("postgresql+asyncpg://"):
+                url = f"postgresql+asyncpg://{url}"
         
         # Remove sslmode from URL (asyncpg handles SSL via connect_args)
         if "?" in url:

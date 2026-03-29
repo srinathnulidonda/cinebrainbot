@@ -18,3 +18,4 @@ cohere
 psutil
 flask
 flask-cors
+sqlalchemy-cockroachdb
