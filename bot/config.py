@@ -63,13 +63,28 @@ class Settings(BaseSettings):
     @property
     def async_database_url(self) -> str:
         url = self.DATABASE_URL
+        
+        # Convert to asyncpg driver
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql+asyncpg://", 1)
         elif url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
         elif not url.startswith("postgresql+asyncpg://"):
             url = f"postgresql+asyncpg://{url}"
+        
+        # Remove sslmode from URL (asyncpg handles SSL via connect_args)
+        if "?" in url:
+            base, params = url.split("?", 1)
+            param_list = params.split("&")
+            filtered = [p for p in param_list if not p.startswith("sslmode=")]
+            url = base + ("?" + "&".join(filtered) if filtered else "")
+        
         return url
+
+    @property
+    def db_requires_ssl(self) -> bool:
+        """Check if the original URL requires SSL."""
+        return "sslmode=" in self.DATABASE_URL
 
 
 @lru_cache

@@ -1,6 +1,7 @@
 # bot/models/engine.py
 import logging
 import asyncio
+import ssl
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 import redis.asyncio as aioredis
@@ -8,6 +9,16 @@ from bot.config import get_settings
 
 logger = logging.getLogger(__name__)
 _settings = get_settings()
+
+# Build connect_args with SSL if needed
+_connect_args = {
+    "timeout": 15,
+    "command_timeout": 30,
+}
+
+# Enable SSL for providers that require it (CockroachDB, Neon, Aiven, etc.)
+if _settings.db_requires_ssl:
+    _connect_args["ssl"] = ssl.create_default_context()
 
 engine = create_async_engine(
     _settings.async_database_url,
@@ -17,10 +28,7 @@ engine = create_async_engine(
     pool_recycle=min(_settings.DB_POOL_RECYCLE, 300),
     pool_timeout=30,
     echo=False,
-    connect_args={
-        "timeout": 15,
-        "command_timeout": 30,
-    },
+    connect_args=_connect_args,
 )
 
 AsyncSessionFactory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -75,7 +83,7 @@ async def get_session():
 async def _connect_db_with_retry(max_attempts: int = 5, base_delay: float = 2.0) -> None:
     """
     Connect to PostgreSQL with exponential backoff.
-    Handles cold starts on Render's free tier where the DB may be sleeping.
+    Handles cold starts where the DB may be sleeping.
     """
     from bot.models.database import Base
 
@@ -95,7 +103,7 @@ async def _connect_db_with_retry(max_attempts: int = 5, base_delay: float = 2.0)
         ) as e:
             last_error = e
             if attempt < max_attempts:
-                delay = base_delay * (2 ** (attempt - 1))  # 2s, 4s, 8s, 16s
+                delay = base_delay * (2 ** (attempt - 1))
                 logger.warning(
                     "⚠️ DB connection attempt %d/%d failed: %s — retrying in %.0fs",
                     attempt, max_attempts, type(e).__name__, delay,
@@ -107,7 +115,6 @@ async def _connect_db_with_retry(max_attempts: int = 5, base_delay: float = 2.0)
                     max_attempts, e,
                 )
         except Exception as e:
-            # Non-transient error, don't retry
             logger.error("❌ DB connection failed (non-retryable): %s", e)
             raise
 
@@ -118,7 +125,7 @@ async def init_db():
     global _bot_loop
     _bot_loop = asyncio.get_running_loop()
 
-    # Initialize Redis first (usually faster)
+    # Initialize Redis
     await redis_client._close_client()
     redis_client._init_client(
         _settings.REDIS_URL,
@@ -129,7 +136,7 @@ async def init_db():
         retry_on_timeout=True,
     )
 
-    # Retry Redis connection too
+    # Retry Redis connection
     for attempt in range(1, 4):
         try:
             await redis_client.ping()
