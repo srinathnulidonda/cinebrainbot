@@ -14,12 +14,12 @@ engine = create_async_engine(
     pool_size=_settings.DB_POOL_SIZE,
     max_overflow=_settings.DB_MAX_OVERFLOW,
     pool_pre_ping=True,
-    pool_recycle=min(_settings.DB_POOL_RECYCLE, 300),   # ← cap at 5 min for Render
+    pool_recycle=min(_settings.DB_POOL_RECYCLE, 300),
     pool_timeout=30,
     echo=False,
     connect_args={
-        "timeout": 10,              # ← asyncpg: fail fast on connect, don't hang
-        "command_timeout": 30,       # ← asyncpg: per-query timeout
+        "timeout": 15,
+        "command_timeout": 30,
     },
 )
 
@@ -72,26 +72,79 @@ async def get_session():
         await session.close()
 
 
+async def _connect_db_with_retry(max_attempts: int = 5, base_delay: float = 2.0) -> None:
+    """
+    Connect to PostgreSQL with exponential backoff.
+    Handles cold starts on Render's free tier where the DB may be sleeping.
+    """
+    from bot.models.database import Base
+
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("✅ Database connected and tables initialized")
+            return
+        except (
+            ConnectionResetError,
+            ConnectionRefusedError,
+            ConnectionAbortedError,
+            OSError,
+            TimeoutError,
+        ) as e:
+            last_error = e
+            if attempt < max_attempts:
+                delay = base_delay * (2 ** (attempt - 1))  # 2s, 4s, 8s, 16s
+                logger.warning(
+                    "⚠️ DB connection attempt %d/%d failed: %s — retrying in %.0fs",
+                    attempt, max_attempts, type(e).__name__, delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    "❌ DB connection failed after %d attempts: %s",
+                    max_attempts, e,
+                )
+        except Exception as e:
+            # Non-transient error, don't retry
+            logger.error("❌ DB connection failed (non-retryable): %s", e)
+            raise
+
+    raise last_error  # type: ignore[misc]
+
+
 async def init_db():
     global _bot_loop
     _bot_loop = asyncio.get_running_loop()
 
+    # Initialize Redis first (usually faster)
     await redis_client._close_client()
     redis_client._init_client(
         _settings.REDIS_URL,
         decode_responses=True,
         max_connections=20,
-        socket_connect_timeout=5,
+        socket_connect_timeout=10,
         socket_keepalive=True,
         retry_on_timeout=True,
     )
-    await redis_client.ping()
-    logger.info("Redis connected on bot event loop")
 
-    from bot.models.database import Base
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables initialised")
+    # Retry Redis connection too
+    for attempt in range(1, 4):
+        try:
+            await redis_client.ping()
+            logger.info("✅ Redis connected")
+            break
+        except Exception as e:
+            if attempt < 3:
+                logger.warning("⚠️ Redis ping attempt %d/3 failed: %s", attempt, e)
+                await asyncio.sleep(2)
+            else:
+                logger.error("❌ Redis connection failed: %s", e)
+                raise
+
+    # Connect to PostgreSQL with retry
+    await _connect_db_with_retry(max_attempts=5, base_delay=2.0)
 
 
 async def close_db():
